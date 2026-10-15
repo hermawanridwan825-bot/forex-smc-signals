@@ -67,10 +67,11 @@ export async function POST(req: Request) {
       message: 'Signal successfully recorded to Supabase!',
       signal: data?.[0] || payload
     });
-  } catch (error: any) {
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Internal Server Error';
     console.error('Webhook error:', error);
     return NextResponse.json(
-      { error: error.message || 'Internal Server Error' },
+      { error: errorMsg },
       { status: 500 }
     );
   }

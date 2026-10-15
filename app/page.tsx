@@ -12,12 +12,8 @@ import {
   Clock,
   Target,
   AlertCircle,
-  CheckCircle2,
   Copy,
-  ExternalLink,
   RefreshCw,
-  Sliders,
-  DollarSign,
   Radio,
   BookOpen
 } from 'lucide-react';
@@ -142,7 +138,7 @@ export default function Home() {
         } else {
           setIsLiveConnected(true);
         }
-      } catch (err) {
+      } catch {
         console.warn('Using demo data while waiting for Supabase credentials');
       }
     }
@@ -228,7 +224,7 @@ export default function Home() {
       } else if (data) {
         setSignals((prev) => [data[0] as Signal, ...prev]);
       }
-    } catch (err) {
+    } catch {
       setSignals((prev) => [{ ...testSignal, id: Date.now(), created_at: new Date().toISOString() } as Signal, ...prev]);
     } finally {
       setIsSendingTest(false);
