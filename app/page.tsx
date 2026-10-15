@@ -4,8 +4,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { supabase, Signal } from '@/lib/supabase';
 import {
-  TrendingUp,
   TrendingDown,
+  TrendingUp,
   Activity,
   ShieldCheck,
   Zap,
@@ -13,9 +13,12 @@ import {
   Target,
   AlertCircle,
   Copy,
-  RefreshCw,
   Radio,
-  BookOpen
+  BookOpen,
+  Sparkles,
+  Loader2,
+  CheckCircle,
+  Flame
 } from 'lucide-react';
 
 // Dynamic import for TradingView Widget to avoid SSR issues
@@ -90,26 +93,48 @@ export default function Home() {
   const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
-  const [isSendingTest, setIsSendingTest] = useState<boolean>(false);
   const [activeKillzone, setActiveKillzone] = useState<string>('Checking session...');
+
+  // On-demand signal request state
+  const [isRequesting, setIsRequesting] = useState<boolean>(false);
+  const [requestProgress, setRequestProgress] = useState<string>('');
+  const [showRequestSuccess, setShowRequestSuccess] = useState<boolean>(false);
+  const [lastGeneratedSignal, setLastGeneratedSignal] = useState<Signal | null>(null);
+
+  // Play audio chime when signal generated
+  const playChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch {
+      // Audio autoplay permission fallback
+    }
+  };
 
   // Current ICT Killzone calculation (WIB / GMT+7)
   useEffect(() => {
     const updateKZ = () => {
       const now = new Date();
-      // UTC hours
       const utcHours = now.getUTCHours();
-      // London KZ: 07:00 - 10:00 UTC (14:00 - 17:00 WIB)
-      // NY KZ: 12:00 - 15:00 UTC (19:00 - 22:00 WIB)
-      // Asian Session: 00:00 - 06:00 UTC (07:00 - 13:00 WIB)
       if (utcHours >= 7 && utcHours < 10) {
-        setActiveKillzone('🇬🇧 London Killzone Active (High Volatility)');
+        setActiveKillzone('🇬🇧 London Killzone Aktif (High Volatility)');
       } else if (utcHours >= 12 && utcHours < 15) {
-        setActiveKillzone('🇺🇸 New York Open Killzone Active (Optimal Entry)');
+        setActiveKillzone('🇺🇸 New York Open Killzone Aktif (Optimal Trade Entry)');
       } else if (utcHours >= 0 && utcHours < 6) {
         setActiveKillzone('🇯🇵 Asian Range / Liquidity Build-up');
       } else {
-        setActiveKillzone('🌐 Normal Market Hours (Watch FVG Tap)');
+        setActiveKillzone('🌐 Sesi Reguler (Pantau FVG Tap)');
       }
     };
     updateKZ();
@@ -156,6 +181,7 @@ export default function Home() {
           if (payload.eventType === 'INSERT') {
             const newSignal = payload.new as Signal;
             setSignals((prev) => [newSignal, ...prev]);
+            playChime();
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Signal;
             setSignals((prev) =>
@@ -193,41 +219,40 @@ export default function Home() {
     [filteredSignals]
   );
 
-  // Send a test signal into Supabase
-  const handleSendTestSignal = async () => {
-    setIsSendingTest(true);
-    const pairs = ['XAUUSD', 'EURUSD', 'GBPUSD'];
-    const randomPair = pairs[Math.floor(Math.random() * pairs.length)];
-    const isBuy = Math.random() > 0.5;
-    const basePrice = randomPair === 'XAUUSD' ? 2650.00 : 1.0850;
-    const offset = (Math.random() * 5).toFixed(2);
-
-    const testSignal = {
-      pair: randomPair,
-      action: isBuy ? 'BUY' : 'SELL',
-      entry_price: Number((basePrice + Number(offset)).toFixed(2)),
-      stop_loss: Number((basePrice - 8).toFixed(2)),
-      take_profit_1: Number((basePrice + 14).toFixed(2)),
-      take_profit_2: Number((basePrice + 25).toFixed(2)),
-      timeframe: '15m',
-      setup_name: 'Simulasi SMC - London FVG Tap + CHoCH',
-      status: 'ACTIVE',
-      pips_result: 0
-    };
+  // Request on-demand signal from backend analyzer
+  const handleRequestSignal = async (targetPair: string) => {
+    setIsRequesting(true);
+    setShowRequestSuccess(false);
 
     try {
-      const { data, error } = await supabase.from('signals').insert([testSignal]).select();
-      if (error) {
-        // If Supabase not yet configured with keys, insert into local state for visual check
-        setSignals((prev) => [{ ...testSignal, id: Date.now(), created_at: new Date().toISOString() } as Signal, ...prev]);
-        alert('Signal uji coba berhasil ditambahkan secara lokal!');
-      } else if (data) {
-        setSignals((prev) => [data[0] as Signal, ...prev]);
+      setRequestProgress('Mengambil data harga pasar terkini...');
+      await new Promise((r) => setTimeout(r, 600));
+
+      setRequestProgress('Menganalisa Market Structure & Premium/Discount...');
+      await new Promise((r) => setTimeout(r, 600));
+
+      setRequestProgress('Mendeteksi Fair Value Gap & Order Block...');
+
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pair: targetPair }),
+      });
+
+      const json = await res.json();
+
+      if (json.signal) {
+        const newSig = json.signal as Signal;
+        setSignals((prev) => [newSig, ...prev.filter((s) => s.id !== newSig.id)]);
+        setLastGeneratedSignal(newSig);
+        playChime();
+        setShowRequestSuccess(true);
       }
-    } catch {
-      setSignals((prev) => [{ ...testSignal, id: Date.now(), created_at: new Date().toISOString() } as Signal, ...prev]);
+    } catch (err) {
+      console.error('Error requesting signal:', err);
     } finally {
-      setIsSendingTest(false);
+      setIsRequesting(false);
+      setRequestProgress('');
     }
   };
 
@@ -279,27 +304,36 @@ export default function Home() {
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
               <span className="text-zinc-300 font-medium">
-                {isLiveConnected ? 'Supabase Live Connected' : 'Demo / Standby'}
+                {isLiveConnected ? 'Supabase Live Connected' : 'Standby'}
               </span>
             </div>
 
-            {/* Test Signal Button */}
+            {/* MAIN ACTION: Minta Signal Sekarang Button */}
             <button
-              onClick={handleSendTestSignal}
-              disabled={isSendingTest}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-200 transition border border-zinc-700"
+              onClick={() => handleRequestSignal('XAUUSD')}
+              disabled={isRequesting}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-zinc-950 text-xs font-bold shadow-lg shadow-amber-500/20 transition transform active:scale-95 disabled:opacity-50"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${isSendingTest ? 'animate-spin' : ''}`} />
-              Test Signal
+              {isRequesting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-black" />
+                  <span>Memindai Market...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4 text-black fill-black" />
+                  <span>Minta Signal XAUUSD</span>
+                </>
+              )}
             </button>
 
             {/* Guide Button */}
             <button
               onClick={() => setShowGuideModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs font-semibold transition"
             >
-              <BookOpen className="h-3.5 w-3.5" />
-              Panduan TradingView
+              <BookOpen className="h-3.5 w-3.5 text-amber-400" />
+              Panduan
             </button>
           </div>
         </div>
@@ -307,6 +341,78 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 lg:px-8 py-6 space-y-6">
+        {/* On-Demand Quick Request Bar */}
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-amber-500/30 shadow-xl shadow-amber-500/5 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <Flame className="h-5 w-5 text-amber-400" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <span>Minta Signal SMC On-Demand</span>
+                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">
+                  Instant Scan
+                </span>
+              </div>
+              <p className="text-xs text-zinc-400">
+                Pilih pair di samping untuk menganalisa harga live dan memunculkan rekomendasi entry SMC saat ini juga.
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Request Buttons */}
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <button
+              onClick={() => handleRequestSignal('XAUUSD')}
+              disabled={isRequesting}
+              className="flex-1 md:flex-initial px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              <Zap className="h-3.5 w-3.5 text-amber-400" />
+              Scan Gold (XAUUSD)
+            </button>
+            <button
+              onClick={() => handleRequestSignal('EURUSD')}
+              disabled={isRequesting}
+              className="flex-1 md:flex-initial px-3.5 py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 text-xs font-semibold transition flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              Scan EUR/USD
+            </button>
+            <button
+              onClick={() => handleRequestSignal('GBPUSD')}
+              disabled={isRequesting}
+              className="flex-1 md:flex-initial px-3.5 py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 text-xs font-semibold transition flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              Scan GBP/USD
+            </button>
+          </div>
+        </div>
+
+        {/* Request Scanning State Banner */}
+        {isRequesting && (
+          <div className="p-3.5 rounded-xl bg-zinc-900 border border-amber-500/40 flex items-center gap-3 animate-pulse">
+            <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+            <span className="text-xs font-medium text-amber-300">{requestProgress}</span>
+          </div>
+        )}
+
+        {/* Request Success Banner */}
+        {showRequestSuccess && lastGeneratedSignal && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+              <span className="text-emerald-300 font-medium">
+                Signal baru <strong>{lastGeneratedSignal.pair} {lastGeneratedSignal.action}</strong> berhasil dianalisa dan ditambahkan ke daftar!
+              </span>
+            </div>
+            <button
+              onClick={() => setShowRequestSuccess(false)}
+              className="text-zinc-400 hover:text-zinc-200 text-xs font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Market Session Banner */}
         <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-3 rounded-xl bg-gradient-to-r from-zinc-900 via-zinc-900/90 to-zinc-950 border border-zinc-800 text-xs">
           <div className="flex items-center gap-2.5">
@@ -423,7 +529,7 @@ export default function Home() {
               {activeSignals.length === 0 ? (
                 <div className="p-8 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/40 text-zinc-400 text-xs">
                   <AlertCircle className="h-8 w-8 mx-auto text-zinc-500 mb-2" />
-                  Belum ada signal aktif saat ini. Menunggu setup SMC dari TradingView...
+                  Belum ada signal aktif saat ini. Klik tombol <strong>&ldquo;Minta Signal&rdquo;</strong> di atas untuk memindai market sekarang!
                 </div>
               ) : (
                 activeSignals.map((signal) => {
@@ -608,7 +714,7 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <BookOpen className="h-5 w-5 text-amber-400" />
                 <h3 className="font-bold text-base text-zinc-100">
-                  Panduan Menghubungkan TradingView ke Website
+                  Panduan Menghubungkan Signal Eksternal ke Website
                 </h3>
               </div>
               <button
@@ -621,21 +727,20 @@ export default function Home() {
 
             <div className="space-y-3 text-xs text-zinc-300">
               <p>
-                <strong>Langkah 1:</strong> Buka chart di TradingView (misal XAUUSD).
+                <strong>Opsi 1: Minta Langsung (On-Demand)</strong><br />
+                Gunakan tombol kuning <strong>&ldquo;Minta Signal XAUUSD&rdquo;</strong> di atas untuk menganalisa harga live detik ini juga.
               </p>
               <p>
-                <strong>Langkah 2:</strong> Buat <strong>Alert</strong> baru di indikator SMC Anda.
+                <strong>Opsi 2: Dari MetaTrader 5 (MT5)</strong><br />
+                Gunakan skrip <code>Send_SMC_Signal_To_Web</code> yang sudah terpasang di folder Scripts MT5 Anda.
               </p>
               <p>
-                <strong>Langkah 3:</strong> Pada tab <strong>Notifications</strong>, centang{' '}
-                <strong className="text-amber-400">Webhook URL</strong> dan masukkan URL endpoint website Anda:
+                <strong>Opsi 3: Dari Webhook TradingView / Bot</strong><br />
+                Kirim data POST JSON ke endpoint:
               </p>
               <div className="p-2.5 rounded bg-zinc-950 font-mono text-[11px] text-amber-400 border border-zinc-800">
-                https://domain-website-anda.vercel.app/api/webhook
+                https://forex-smc-signals.vercel.app/api/webhook
               </div>
-              <p>
-                <strong>Langkah 4:</strong> Pada kotak <strong>Message</strong>, tempel format JSON berikut:
-              </p>
 
               <div className="relative">
                 <pre className="p-3 rounded-lg bg-zinc-950 text-emerald-400 font-mono text-[11px] overflow-x-auto border border-zinc-800">
@@ -648,10 +753,6 @@ export default function Home() {
                   <Copy className="h-3 w-3" />
                   {copied ? 'Tersalin!' : 'Salin JSON'}
                 </button>
-              </div>
-
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300/90 text-[11px]">
-                💡 <strong>Tips:</strong> Token <code>{"{{close}}"}</code> di TradingView akan secara otomatis digantikan dengan harga candle saat alert berbunyi.
               </div>
             </div>
 
