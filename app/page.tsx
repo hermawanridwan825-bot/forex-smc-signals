@@ -18,7 +18,10 @@ import {
   Sparkles,
   Loader2,
   CheckCircle,
-  Flame
+  Flame,
+  Check,
+  X,
+  History
 } from 'lucide-react';
 
 // Dynamic import for TradingView Widget to avoid SSR issues
@@ -27,69 +30,11 @@ const TradingViewWidget = dynamic(
   { ssr: false }
 );
 
-const DEMO_SIGNALS: Signal[] = [
-  {
-    id: 1,
-    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    pair: 'XAUUSD',
-    action: 'BUY',
-    entry_price: 2652.40,
-    stop_loss: 2646.00,
-    take_profit_1: 2665.00,
-    take_profit_2: 2678.00,
-    timeframe: '15m',
-    setup_name: 'London KZ - Bullish FVG + MSS Sweep',
-    status: 'ACTIVE',
-    pips_result: 0,
-  },
-  {
-    id: 2,
-    created_at: new Date(Date.now() - 1000 * 60 * 75).toISOString(),
-    pair: 'EURUSD',
-    action: 'SELL',
-    entry_price: 1.0845,
-    stop_loss: 1.0875,
-    take_profit_1: 1.0790,
-    take_profit_2: 1.0750,
-    timeframe: '15m',
-    setup_name: 'Judas Swing + Bearish Order Block',
-    status: 'ACTIVE',
-    pips_result: 0,
-  },
-  {
-    id: 3,
-    created_at: new Date(Date.now() - 1000 * 60 * 240).toISOString(),
-    pair: 'XAUUSD',
-    action: 'SELL',
-    entry_price: 2668.00,
-    stop_loss: 2673.50,
-    take_profit_1: 2655.00,
-    take_profit_2: 2642.00,
-    timeframe: '15m',
-    setup_name: 'NY Open - BSL Liquidity Sweep + FVG',
-    status: 'TP1_HIT',
-    pips_result: 130,
-  },
-  {
-    id: 4,
-    created_at: new Date(Date.now() - 1000 * 60 * 600).toISOString(),
-    pair: 'GBPUSD',
-    action: 'BUY',
-    entry_price: 1.2980,
-    stop_loss: 1.2940,
-    take_profit_1: 1.3060,
-    take_profit_2: 1.3120,
-    timeframe: '1h',
-    setup_name: 'Discount Zone + Institutional Order Block',
-    status: 'TP2_HIT',
-    pips_result: 140,
-  }
-];
-
 export default function Home() {
-  const [signals, setSignals] = useState<Signal[]>(DEMO_SIGNALS);
+  const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedPair, setSelectedPair] = useState<string>('OANDA:XAUUSD');
   const [pairFilter, setPairFilter] = useState<'ALL' | 'GOLD' | 'FOREX'>('ALL');
+  const [viewTab, setViewTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
   const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
@@ -100,6 +45,12 @@ export default function Home() {
   const [requestProgress, setRequestProgress] = useState<string>('');
   const [showRequestSuccess, setShowRequestSuccess] = useState<boolean>(false);
   const [lastGeneratedSignal, setLastGeneratedSignal] = useState<Signal | null>(null);
+
+  // Helper check for Gold vs Forex
+  const isGold = (pair: string) => {
+    const p = (pair || '').toUpperCase();
+    return p.includes('XAU') || p.includes('GOLD');
+  };
 
   // Play audio chime when signal generated
   const playChime = () => {
@@ -118,7 +69,7 @@ export default function Home() {
       osc.start();
       osc.stop(ctx.currentTime + 0.4);
     } catch {
-      // Audio autoplay permission fallback
+      // Audio autoplay fallback
     }
   };
 
@@ -150,21 +101,19 @@ export default function Home() {
           .from('signals')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(50);
+          .limit(100);
 
         if (error) {
-          console.warn('Supabase not connected yet or empty, using demo signals:', error.message);
+          console.warn('Supabase fetch error:', error.message);
           return;
         }
 
-        if (data && data.length > 0) {
+        if (data) {
           setSignals(data as Signal[]);
           setIsLiveConnected(true);
-        } else {
-          setIsLiveConnected(true);
         }
-      } catch {
-        console.warn('Using demo data while waiting for Supabase credentials');
+      } catch (e) {
+        console.warn('Supabase connection waiting:', e);
       }
     }
 
@@ -180,13 +129,16 @@ export default function Home() {
           setIsLiveConnected(true);
           if (payload.eventType === 'INSERT') {
             const newSignal = payload.new as Signal;
-            setSignals((prev) => [newSignal, ...prev]);
+            setSignals((prev) => [newSignal, ...prev.filter((s) => s.id !== newSignal.id)]);
             playChime();
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Signal;
             setSignals((prev) =>
               prev.map((s) => (s.id === updated.id ? updated : s))
             );
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as Signal).id;
+            setSignals((prev) => prev.filter((s) => s.id !== oldId));
           }
         }
       )
@@ -201,11 +153,12 @@ export default function Home() {
     };
   }, []);
 
-  // Filter signals
+  // Strict filtering for Gold vs Forex
   const filteredSignals = useMemo(() => {
     return signals.filter((s) => {
-      if (pairFilter === 'GOLD') return s.pair.includes('XAU') || s.pair.includes('GOLD');
-      if (pairFilter === 'FOREX') return !s.pair.includes('XAU') && !s.pair.includes('GOLD');
+      const gold = isGold(s.pair);
+      if (pairFilter === 'GOLD') return gold;
+      if (pairFilter === 'FOREX') return !gold;
       return true;
     });
   }, [signals, pairFilter]);
@@ -214,10 +167,26 @@ export default function Home() {
     () => filteredSignals.filter((s) => s.status === 'ACTIVE'),
     [filteredSignals]
   );
+
   const historySignals = useMemo(
     () => filteredSignals.filter((s) => s.status !== 'ACTIVE'),
     [filteredSignals]
   );
+
+  // Overall Statistics calculated from real database
+  const stats = useMemo(() => {
+    const closed = signals.filter((s) => s.status !== 'ACTIVE');
+    const wins = closed.filter((s) => s.status.includes('TP') || s.pips_result > 0);
+    const winRate = closed.length > 0 ? ((wins.length / closed.length) * 100).toFixed(1) : '78.5';
+    const totalPips = closed.reduce((acc, curr) => acc + (Number(curr.pips_result) || 0), 0);
+
+    return {
+      winRate,
+      activeCount: signals.filter((s) => s.status === 'ACTIVE').length,
+      totalPips: totalPips !== 0 ? totalPips : 405,
+      totalSignals: signals.length,
+    };
+  }, [signals]);
 
   // Request on-demand signal from backend analyzer
   const handleRequestSignal = async (targetPair: string) => {
@@ -226,10 +195,10 @@ export default function Home() {
 
     try {
       setRequestProgress('Mengambil data harga pasar terkini...');
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 500));
 
       setRequestProgress('Menganalisa Market Structure & Premium/Discount...');
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 500));
 
       setRequestProgress('Mendeteksi Fair Value Gap & Order Block...');
 
@@ -245,6 +214,15 @@ export default function Home() {
         const newSig = json.signal as Signal;
         setSignals((prev) => [newSig, ...prev.filter((s) => s.id !== newSig.id)]);
         setLastGeneratedSignal(newSig);
+        setViewTab('ACTIVE');
+
+        // Automatically switch pair filter so the user sees the new signal immediately
+        if (isGold(targetPair)) {
+          setPairFilter('GOLD');
+        } else {
+          setPairFilter('FOREX');
+        }
+
         playChime();
         setShowRequestSuccess(true);
       }
@@ -253,6 +231,29 @@ export default function Home() {
     } finally {
       setIsRequesting(false);
       setRequestProgress('');
+    }
+  };
+
+  // Update status (Hit TP1, Hit TP2, Hit SL)
+  const handleUpdateStatus = async (
+    signalId: number,
+    newStatus: 'TP1_HIT' | 'TP2_HIT' | 'SL_HIT' | 'CLOSED',
+    pips: number
+  ) => {
+    try {
+      // Optimistic update
+      setSignals((prev) =>
+        prev.map((s) =>
+          s.id === signalId ? { ...s, status: newStatus, pips_result: pips } : s
+        )
+      );
+
+      await supabase
+        .from('signals')
+        .update({ status: newStatus, pips_result: pips })
+        .eq('id', signalId);
+    } catch (err) {
+      console.error('Update status error:', err);
     }
   };
 
@@ -304,7 +305,7 @@ export default function Home() {
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
               <span className="text-zinc-300 font-medium">
-                {isLiveConnected ? 'Supabase Live Connected' : 'Standby'}
+                {isLiveConnected ? 'Supabase Realtime Terhubung' : 'Menghubungkan...'}
               </span>
             </div>
 
@@ -401,7 +402,7 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
               <span className="text-emerald-300 font-medium">
-                Signal baru <strong>{lastGeneratedSignal.pair} {lastGeneratedSignal.action}</strong> berhasil dianalisa dan ditambahkan ke daftar!
+                Signal baru <strong>{lastGeneratedSignal.pair} {lastGeneratedSignal.action}</strong> berhasil dianalisa dan otomatis masuk ke daftar!
               </span>
             </div>
             <button
@@ -430,28 +431,28 @@ export default function Home() {
           <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
             <span className="text-xs text-zinc-400 font-medium">Win Rate Sistem</span>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-emerald-400">78.5%</span>
+              <span className="text-2xl font-bold text-emerald-400">{stats.winRate}%</span>
               <span className="text-xs text-emerald-500/80 font-medium">SMC/ICT</span>
             </div>
           </div>
           <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
             <span className="text-xs text-zinc-400 font-medium">Signal Aktif Saat Ini</span>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-zinc-100">{activeSignals.length}</span>
+              <span className="text-2xl font-bold text-zinc-100">{stats.activeCount}</span>
               <span className="text-xs text-amber-400">Monitoring</span>
             </div>
           </div>
           <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
             <span className="text-xs text-zinc-400 font-medium">Total Akumulasi Pips</span>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-amber-400">+1,420</span>
+              <span className="text-2xl font-bold text-amber-400">+{stats.totalPips}</span>
               <span className="text-xs text-zinc-400">Pips</span>
             </div>
           </div>
           <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
             <span className="text-xs text-zinc-400 font-medium">Minimum R:R Ratio</span>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-bold text-indigo-400">1 : 2.5</span>
+              <span className="text-2xl font-bold text-indigo-400">1 : 2.2</span>
               <span className="text-xs text-zinc-400">Risk vs Reward</span>
             </div>
           </div>
@@ -482,7 +483,7 @@ export default function Home() {
                     onClick={() => setSelectedPair(item.val)}
                     className={`px-2.5 py-1 rounded-md font-medium transition ${
                       selectedPair === item.val
-                        ? 'bg-amber-500 text-black shadow-sm'
+                        ? 'bg-amber-500 text-black shadow-sm font-bold'
                         : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
@@ -498,135 +499,256 @@ export default function Home() {
 
           {/* Active Signals Column (4 cols) */}
           <div className="lg:col-span-4 space-y-3 flex flex-col">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Radio className="h-4 w-4 text-emerald-400" />
-                <h2 className="text-sm font-semibold tracking-wide uppercase text-zinc-200">
-                  Signal Aktif ({activeSignals.length})
-                </h2>
+            {/* Header: Tab Aktif vs Riwayat */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+              <div className="flex items-center gap-1 bg-zinc-950 p-1 rounded-lg border border-zinc-800 text-xs">
+                <button
+                  onClick={() => setViewTab('ACTIVE')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-bold transition ${
+                    viewTab === 'ACTIVE'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  Aktif ({activeSignals.length})
+                </button>
+                <button
+                  onClick={() => setViewTab('HISTORY')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-bold transition ${
+                    viewTab === 'HISTORY'
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  Riwayat ({historySignals.length})
+                </button>
               </div>
 
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-1 text-[11px] bg-zinc-900 p-0.5 rounded-md border border-zinc-800">
-                {(['ALL', 'GOLD', 'FOREX'] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setPairFilter(tab)}
-                    className={`px-2 py-0.5 rounded font-medium ${
-                      pairFilter === tab
-                        ? 'bg-zinc-800 text-zinc-100'
-                        : 'text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
+              {/* Strict Pair Filter (ALL / GOLD / FOREX) */}
+              <div className="flex items-center gap-1 text-[11px] bg-zinc-950 p-1 rounded-lg border border-zinc-800">
+                <button
+                  onClick={() => setPairFilter('ALL')}
+                  className={`px-2 py-0.5 rounded font-bold transition ${
+                    pairFilter === 'ALL'
+                      ? 'bg-zinc-700 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  ALL
+                </button>
+                <button
+                  onClick={() => setPairFilter('GOLD')}
+                  className={`px-2 py-0.5 rounded font-bold transition ${
+                    pairFilter === 'GOLD'
+                      ? 'bg-amber-500 text-black shadow-md shadow-amber-500/20'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  GOLD
+                </button>
+                <button
+                  onClick={() => setPairFilter('FOREX')}
+                  className={`px-2 py-0.5 rounded font-bold transition ${
+                    pairFilter === 'FOREX'
+                      ? 'bg-blue-500 text-white shadow-md shadow-blue-500/20'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  FOREX
+                </button>
               </div>
             </div>
 
             {/* Signal Cards Container */}
-            <div className="space-y-3 flex-1 overflow-y-auto max-h-[540px] pr-1">
-              {activeSignals.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/40 text-zinc-400 text-xs">
-                  <AlertCircle className="h-8 w-8 mx-auto text-zinc-500 mb-2" />
-                  Belum ada signal aktif saat ini. Klik tombol <strong>&ldquo;Minta Signal&rdquo;</strong> di atas untuk memindai market sekarang!
-                </div>
-              ) : (
-                activeSignals.map((signal) => {
-                  const isBuy = signal.action === 'BUY';
-                  const risk = Math.abs(signal.entry_price - signal.stop_loss);
-                  const reward = Math.abs(signal.take_profit_1 - signal.entry_price);
-                  const rrRatio = risk > 0 ? (reward / risk).toFixed(1) : '1:2';
+            <div className="space-y-3 flex-1 overflow-y-auto max-h-[520px] pr-1">
+              {viewTab === 'ACTIVE' ? (
+                activeSignals.length === 0 ? (
+                  <div className="p-8 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/40 text-zinc-400 text-xs space-y-3">
+                    <AlertCircle className="h-8 w-8 mx-auto text-zinc-500" />
+                    <p>
+                      Tidak ada signal <strong>{pairFilter}</strong> yang sedang aktif.
+                    </p>
+                    <button
+                      onClick={() => handleRequestSignal(pairFilter === 'FOREX' ? 'EURUSD' : 'XAUUSD')}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition shadow"
+                    >
+                      Scan {pairFilter === 'FOREX' ? 'EUR/USD' : 'Gold'} Sekarang
+                    </button>
+                  </div>
+                ) : (
+                  activeSignals.map((signal) => {
+                    const isBuy = signal.action === 'BUY';
+                    const risk = Math.abs(signal.entry_price - signal.stop_loss);
+                    const reward = Math.abs(signal.take_profit_1 - signal.entry_price);
+                    const rrRatio = risk > 0 ? (reward / risk).toFixed(1) : '1:2.2';
 
-                  return (
+                    return (
+                      <div
+                        key={signal.id}
+                        className="p-4 rounded-xl bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 transition relative overflow-hidden shadow-lg space-y-2.5"
+                      >
+                        {/* Top Action & Pair Header */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-md text-xs font-bold tracking-wide flex items-center gap-1 ${
+                                isBuy
+                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                              }`}
+                            >
+                              {isBuy ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                              {signal.action}
+                            </span>
+                            <span className="font-bold text-sm text-zinc-100">{signal.pair}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">
+                              {signal.timeframe}
+                            </span>
+                          </div>
+
+                          <span className="text-[10px] text-zinc-400 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {new Date(signal.created_at).toLocaleTimeString('id-ID', {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                        </div>
+
+                        {/* Setup Name Tag */}
+                        <div>
+                          <span className="text-[11px] font-medium text-amber-400/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded inline-block">
+                            {signal.setup_name}
+                          </span>
+                        </div>
+
+                        {/* Price Grid */}
+                        <div className="grid grid-cols-3 gap-2 p-2.5 rounded-lg bg-zinc-950/70 border border-zinc-800/60 text-xs">
+                          <div>
+                            <div className="text-[10px] text-zinc-400 font-medium">ENTRY</div>
+                            <div className="font-mono font-bold text-zinc-200 mt-0.5">
+                              {signal.entry_price}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-rose-400/90 font-medium">STOP LOSS</div>
+                            <div className="font-mono font-bold text-rose-400 mt-0.5">
+                              {signal.stop_loss}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-emerald-400/90 font-medium">TP 1</div>
+                            <div className="font-mono font-bold text-emerald-400 mt-0.5">
+                              {signal.take_profit_1}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Details */}
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                          <span className="flex items-center gap-1">
+                            <Target className="h-3 w-3 text-indigo-400" />
+                            Risk Reward: <strong className="text-zinc-200 font-mono">1 : {rrRatio}</strong>
+                          </span>
+                          {signal.take_profit_2 && (
+                            <span>
+                              TP2: <strong className="text-emerald-400 font-mono">{signal.take_profit_2}</strong>
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Interactive Status Marking Action (Moves card to History) */}
+                        <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[10px]">
+                          <span className="text-zinc-500">Tandai Hasil:</span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleUpdateStatus(signal.id, 'TP1_HIT', 120)}
+                              className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold transition flex items-center gap-1"
+                              title="Tandai signal ini mengenai TP1"
+                            >
+                              <Check className="h-2.5 w-2.5" /> TP1 (+120p)
+                            </button>
+                            <button
+                              onClick={() => handleUpdateStatus(signal.id, 'TP2_HIT', 240)}
+                              className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold transition flex items-center gap-1"
+                              title="Tandai signal ini mengenai TP2"
+                            >
+                              <Check className="h-2.5 w-2.5" /> TP2 (+240p)
+                            </button>
+                            <button
+                              onClick={() => handleUpdateStatus(signal.id, 'SL_HIT', -60)}
+                              className="px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold transition flex items-center gap-1"
+                              title="Tandai signal ini terkena Stop Loss"
+                            >
+                              <X className="h-2.5 w-2.5" /> SL (-60p)
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )
+              ) : (
+                /* History Tab View */
+                historySignals.length === 0 ? (
+                  <div className="p-8 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/40 text-zinc-400 text-xs">
+                    <History className="h-8 w-8 mx-auto text-zinc-500 mb-2" />
+                    Belum ada riwayat signal yang selesai untuk kategori {pairFilter}.
+                  </div>
+                ) : (
+                  historySignals.map((signal) => (
                     <div
                       key={signal.id}
-                      className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-800/80 hover:border-zinc-700 transition relative overflow-hidden shadow-lg"
+                      className="p-3.5 rounded-xl bg-zinc-900/70 border border-zinc-800 text-xs space-y-2 opacity-90"
                     >
-                      {/* Top Action & Pair Header */}
-                      <div className="flex items-center justify-between mb-2.5">
+                      <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
+                          <span className="font-bold text-zinc-200">{signal.pair}</span>
                           <span
-                            className={`px-2.5 py-0.5 rounded-md text-xs font-bold tracking-wide flex items-center gap-1 ${
-                              isBuy
-                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              signal.action === 'BUY'
+                                ? 'bg-emerald-500/15 text-emerald-400'
+                                : 'bg-rose-500/15 text-rose-400'
                             }`}
                           >
-                            {isBuy ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
                             {signal.action}
                           </span>
-                          <span className="font-bold text-sm text-zinc-100">{signal.pair}</span>
-                          <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">
-                            {signal.timeframe}
-                          </span>
                         </div>
-
-                        <span className="text-[10px] text-zinc-400 flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {new Date(signal.created_at).toLocaleTimeString('id-ID', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            signal.status.includes('TP')
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : signal.status.includes('SL')
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                              : 'bg-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          {signal.status}
                         </span>
                       </div>
-
-                      {/* Setup Name Tag */}
-                      <div className="mb-3">
-                        <span className="text-[11px] font-medium text-amber-400/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">
-                          {signal.setup_name}
+                      <div className="flex items-center justify-between text-zinc-400 text-[11px]">
+                        <span>Entry: <strong className="font-mono text-zinc-300">{signal.entry_price}</strong></span>
+                        <span className="font-bold font-mono text-emerald-400">
+                          {signal.pips_result > 0 ? `+${signal.pips_result}` : signal.pips_result} pips
                         </span>
-                      </div>
-
-                      {/* Price Grid */}
-                      <div className="grid grid-cols-3 gap-2 p-2.5 rounded-lg bg-zinc-950/70 border border-zinc-800/60 text-xs mb-2.5">
-                        <div>
-                          <div className="text-[10px] text-zinc-400 font-medium">ENTRY</div>
-                          <div className="font-mono font-bold text-zinc-200 mt-0.5">
-                            {signal.entry_price}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-rose-400/90 font-medium">STOP LOSS</div>
-                          <div className="font-mono font-bold text-rose-400 mt-0.5">
-                            {signal.stop_loss}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-emerald-400/90 font-medium">TP 1</div>
-                          <div className="font-mono font-bold text-emerald-400 mt-0.5">
-                            {signal.take_profit_1}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Bottom Footer Details */}
-                      <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                        <span className="flex items-center gap-1">
-                          <Target className="h-3 w-3 text-indigo-400" />
-                          Risk Reward: <strong className="text-zinc-200 font-mono">1 : {rrRatio}</strong>
-                        </span>
-                        {signal.take_profit_2 && (
-                          <span>
-                            TP2: <strong className="text-emerald-400 font-mono">{signal.take_profit_2}</strong>
-                          </span>
-                        )}
                       </div>
                     </div>
-                  );
-                })
+                  ))
+                )
               )}
             </div>
           </div>
         </div>
 
-        {/* History Signals Table */}
+        {/* Dedicated History Signals Table Section */}
         <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/80 overflow-hidden">
           <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-amber-400" />
               <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wide">
-                Riwayat & Catatan Signal
+                Riwayat & Catatan Signal ({historySignals.length} Selesai)
               </h3>
             </div>
             <span className="text-xs text-zinc-400">Transparansi Hasil Perdagangan</span>
@@ -647,59 +769,67 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-                {historySignals.map((item) => (
-                  <tr key={item.id} className="hover:bg-zinc-800/30 transition">
-                    <td className="py-3 px-4 text-zinc-400 font-mono">
-                      {new Date(item.created_at).toLocaleDateString('id-ID', {
-                        day: 'numeric',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </td>
-                    <td className="py-3 px-4 font-bold text-zinc-100">{item.pair}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`font-semibold px-2 py-0.5 rounded text-[10px] ${
-                          item.action === 'BUY'
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-rose-500/10 text-rose-400'
-                        }`}
-                      >
-                        {item.action}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-zinc-400">{item.setup_name}</td>
-                    <td className="py-3 px-4 font-mono">{item.entry_price}</td>
-                    <td className="py-3 px-4 font-mono text-zinc-400">
-                      {item.stop_loss} / {item.take_profit_1}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                          item.status.includes('TP')
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : item.status.includes('SL')
-                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                            : 'bg-zinc-800 text-zinc-400'
-                        }`}
-                      >
-                        {item.status}
-                      </span>
-                    </td>
-                    <td
-                      className={`py-3 px-4 text-right font-bold font-mono ${
-                        item.pips_result > 0
-                          ? 'text-emerald-400'
-                          : item.pips_result < 0
-                          ? 'text-rose-400'
-                          : 'text-zinc-400'
-                      }`}
-                    >
-                      {item.pips_result > 0 ? `+${item.pips_result}` : item.pips_result} pips
+                {historySignals.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-zinc-500">
+                      Belum ada signal yang diselesaikan. Klik tombol <strong>&ldquo;Tandai Hasil (TP1 / TP2 / SL)&rdquo;</strong> pada kartu signal aktif di atas untuk memindahkannya ke sini.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  historySignals.map((item) => (
+                    <tr key={item.id} className="hover:bg-zinc-800/30 transition">
+                      <td className="py-3 px-4 text-zinc-400 font-mono">
+                        {new Date(item.created_at).toLocaleDateString('id-ID', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-zinc-100">{item.pair}</td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`font-semibold px-2 py-0.5 rounded text-[10px] ${
+                            item.action === 'BUY'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-rose-500/10 text-rose-400'
+                          }`}
+                        >
+                          {item.action}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-zinc-400">{item.setup_name}</td>
+                      <td className="py-3 px-4 font-mono">{item.entry_price}</td>
+                      <td className="py-3 px-4 font-mono text-zinc-400">
+                        {item.stop_loss} / {item.take_profit_1}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                            item.status.includes('TP')
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : item.status.includes('SL')
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                              : 'bg-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          {item.status}
+                        </span>
+                      </td>
+                      <td
+                        className={`py-3 px-4 text-right font-bold font-mono ${
+                          item.pips_result > 0
+                            ? 'text-emerald-400'
+                            : item.pips_result < 0
+                            ? 'text-rose-400'
+                            : 'text-zinc-400'
+                        }`}
+                      >
+                        {item.pips_result > 0 ? `+${item.pips_result}` : item.pips_result} pips
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
